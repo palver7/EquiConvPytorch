@@ -4,7 +4,8 @@ This implementation has been tested under this environment:\
 python 3.8\
 pytorch 1.4\
 torchvision 0.5\
-cuda 10.1\
+cuda 10.1
+
 
 copy the equi_conv.py to the torchvision/ops directory in the torchvision package directory.
 run python test.py for testing. 
