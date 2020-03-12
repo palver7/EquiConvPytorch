@@ -136,6 +136,7 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
         offset = torch.cat([offset for _ in range(bs)],dim=0)
         offset.requires_grad_(False)
         #print(offset.shape)
+        #print(offset)
         return offset            
     
     offset = distortion_aware_map(pano_W, pano_H, weights_w, weights_h, 
