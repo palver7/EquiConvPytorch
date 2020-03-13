@@ -20,4 +20,5 @@ cuda 10.1
 
 
 To use this implementation, copy the equi_conv.py to the torchvision/ops directory in the torchvision package directory.
-run python test.py for testing.     
+
+Run python test.py for testing.     
