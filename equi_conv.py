@@ -10,13 +10,10 @@ from torch.jit.annotations import Optional, Tuple
 def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilation=(1, 1)):
     # type: (Tensor, Tensor, Tensor, Optional[Tensor], Tuple[int, int], Tuple[int, int], Tuple[int, int]) -> Tensor
     """
-    Performs Deformable Convolution, described in Deformable Convolutional Networks
+    Performs Equirectangular Convolution, described in Corners for Layout : End to End Layout Recovery from 360 Images
 
     Arguments:
         input (Tensor[batch_size, in_channels, in_height, in_width]): input tensor
-        offset (Tensor[batch_size, 2 * offset_groups * kernel_height * kernel_width,
-            out_height, out_width]): offsets to be applied for each position in the
-            convolution kernel.
         weight (Tensor[out_channels, in_channels // groups, kernel_height, kernel_width]):
             convolution weights, split into groups of size (in_channels // groups)
         bias (Tensor[out_channels]): optional bias of shape (out_channels,). Default: None
@@ -57,6 +54,7 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
     pano_W = int((in_w + 2*pad_w - dil_w*(weights_w-1)-1)//stride_w + 1)
     pano_H = int((in_h + 2*pad_h - dil_h*(weights_h-1)-1)//stride_h + 1)
     def rotation_matrix(axis, theta):
+        """ code by cfernandez and jmfacil """
         """
         Return the rotation matrix associated with counterclockwise rotation about
         the given axis by theta radians.
@@ -74,7 +72,7 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
     
     
     def equi_coord(pano_W,pano_H,k_W,k_H,u,v): 
-        """ contribution by cfernandez and jmfacil """
+        """ code by cfernandez and jmfacil """
         fov_w = k_W * math.radians(360./float(pano_W))
         focal = (float(k_W)/2) / math.tan(fov_w/2)
         c_x = 0
@@ -120,7 +118,7 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
 
     
     def distortion_aware_map(pano_W, pano_H, k_W, k_H, s_width = 1, s_height = 1,bs = 16):
-        """ contribution by cfernandez and jmfacil """
+        """ code by cfernandez and jmfacil """
         #n=1
         offset = torch.zeros(2*k_H*k_W,pano_H,pano_W)
         
@@ -163,7 +161,7 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
 
 class EquiConv2d(nn.Module):
     """
-    See deform_conv2d
+    See equi_conv2d
     """
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0,
                  dilation=1, groups=1, bias=True):
@@ -205,9 +203,6 @@ class EquiConv2d(nn.Module):
         """
         Arguments:
             input (Tensor[batch_size, in_channels, in_height, in_width]): input tensor
-            offset (Tensor[batch_size, 2 * offset_groups * kernel_height * kernel_width,
-                out_height, out_width]): offsets to be applied for each position in the
-                convolution kernel.
         """
         return equi_conv2d(input, self.weight, self.bias, stride=self.stride,
                              padding=self.padding, dilation=self.dilation)
