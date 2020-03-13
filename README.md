@@ -1,7 +1,7 @@
 ## EquiConv PyTorch implementation
 
 This is the adaptation of the EquiConv part of the Corners for Layout by C. Fernandez et.al (https://arxiv.org/abs/1903.08094)
-[equirectangular convolution](EquiConvPytorch/equirectangular_convolution.png)
+[](equirectangular_convolution.png)
 
 This implementation has been tested under this environment:\
 python 3.8\
