@@ -173,6 +173,7 @@ class EfficientNet(nn.Module):
     def extract_features(self, inputs):
         """ Returns output of the final convolution layer """
         skipconnection={}
+        ret={}
         # Stem
         x = self._swish(self._bn0(self._conv_stem(inputs)))
         skipconnection[0] = x
@@ -194,7 +195,7 @@ class EfficientNet(nn.Module):
         # decoder EDGE MAPS & CORNERS MAPS   
 
         Conv2d = get_same_padding_conv2d(image_size=self._global_params.image_size, conv_type=self._conv_type)
-        conv1a = Conv2d(x.shape[1], 512, kernel_size=3, bias=True, stride=1)
+        conv1a = Conv2d(x.shape[1], skipconnection[index].shape[1], kernel_size=3, bias=True, stride=1)
         d_2x_ec = self._swish(conv1a(x))
         d_2x = F.interpolate(d_2x_ec, scale_factor=2, mode="bilinear", align_corners=True)
 
@@ -202,34 +203,37 @@ class EfficientNet(nn.Module):
         #    print("index: ",index-i, "shape: ", skipconnection[index-i].shape[1])
 
         d_concat_2x = torch.cat((d_2x,skipconnection[index-5]),dim=1)
-        conv1b = Conv2d(d_concat_2x.shape[1], 256, kernel_size=3, bias=True, stride=1)
+        conv1b = Conv2d(d_concat_2x.shape[1], skipconnection[index-5].shape[1], kernel_size=3, bias=True, stride=1)
         d_4x_ec = self._swish(conv1b(d_concat_2x))
         d_4x = F.interpolate(d_4x_ec, scale_factor=2, mode="bilinear", align_corners=True)
         conv1c = Conv2d(d_4x.shape[1], 2, kernel_size=3, bias=True, stride=1)
         output4x_likelihood = conv1c(d_4x)
+        ret['output4x'] = output4x_likelihood
 
         d_concat_4x = torch.cat((d_4x,skipconnection[index-11],output4x_likelihood),dim=1)
-        conv2a = Conv2d(d_concat_4x.shape[1], 128, kernel_size=3, bias=True, stride=1)
+        conv2a = Conv2d(d_concat_4x.shape[1], skipconnection[index-11].shape[1], kernel_size=3, bias=True, stride=1)
         d_8x_ec = self._swish(conv2a(d_concat_4x))
         d_8x = F.interpolate(d_8x_ec, scale_factor=2, mode="bilinear", align_corners=True)
         conv2b = Conv2d(d_8x.shape[1], 2, kernel_size=3, bias=True, stride=1)
         output8x_likelihood = conv2b(d_8x)
+        ret['output8x'] = output8x_likelihood
 
         d_concat_8x = torch.cat((d_8x,skipconnection[index-13],output8x_likelihood),dim=1)
-        conv3a = Conv2d(d_concat_8x.shape[1], 64, kernel_size=5, bias=True, stride=1)
+        conv3a = Conv2d(d_concat_8x.shape[1], skipconnection[index-13].shape[1], kernel_size=5, bias=True, stride=1)
         d_16x_ec = self._swish(conv3a(d_concat_8x))
         d_16x = F.interpolate(d_16x_ec, scale_factor=2, mode="bilinear", align_corners=True)
         conv3b = Conv2d(d_16x.shape[1], 2, kernel_size=3, bias=True, stride=1)
         output16x_likelihood = conv3b(d_16x)
+        ret['output16x'] = output16x_likelihood
 
         d_concat_16x = torch.cat((d_16x,skipconnection[index-15],output16x_likelihood),dim=1)
-        conv4a = Conv2d(d_concat_16x.shape[1], 64, kernel_size=5, bias=True, stride=1)
+        conv4a = Conv2d(d_concat_16x.shape[1], skipconnection[index-15].shape[1], kernel_size=5, bias=True, stride=1)
         d_16x_conv1 = self._swish(conv4a(d_concat_16x))
         conv4b = Conv2d(d_16x_conv1.shape[1], 2, kernel_size=3, bias=True, stride=1)
         output_likelihood = conv4b(d_16x_conv1)
+        ret['output'] = output_likelihood
         
-        
-        return output_likelihood
+        return ret
 
     def forward(self, inputs):
         """ Calls extract_features to extract features, applies final linear layer, and returns logits. """
