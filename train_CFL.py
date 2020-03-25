@@ -16,11 +16,53 @@ import torchvision.transforms as transforms
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
-import numpy as np
+#import numpy as np
 import pandas as pd
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+
+"""
+def _sigmoid(x):
+  y = torch.clamp(x.sigmoid_(), min=1e-4, max=1-1e-4)
+  return y
+"""  
+
+def ce_loss(pred, gt):
+    '''
+    pred and gt have to be the same dimensions of N x C x H x W
+    weighting factors are calculated according to the CFL paper
+    where W per image (single channel) in minibatch = total number of pixels/ 
+    number of positive or negative labels in that image 
+    '''
+    pos_inds = gt.eq(1).float()
+    neg_inds = gt.lt(1).float()
+    
+    pos_weights = (torch.numel(pred[0][0]))/(torch.sum((pos_inds==1.).float(),dim=(1,2,3)))
+    neg_weights = (torch.numel(pred[0][0]))/(torch.sum((neg_inds==1.).float(),dim=(1,2,3)))
+    
+    loss = 0
+
+    pos_loss = pos_weights.view(-1,1,1,1) * (gt * -torch.log(pred))
+    neg_loss = neg_weights.view(-1,1,1,1) * ((1 - gt)*(-torch.log(1-pred)))
+
+    
+    pos_loss = pos_loss.sum()
+    neg_loss = neg_loss.sum()
+    loss = pos_loss + neg_loss
+
+    
+    return loss
+    
+class CELoss(nn.Module):
+  '''nn.Module warpper for custom CE loss'''
+  def __init__(self):
+    super(CELoss, self).__init__()
+    self.ce_loss = ce_loss
+
+  def forward(self, out, target):
+    return self.ce_loss(out, target)
+
 
 class SUN360Dataset(Dataset):
     
@@ -51,21 +93,40 @@ class SUN360Dataset(Dataset):
         image = Image.open(img_name)
         EM = Image.open(EM_name)
         CM = Image.open(CM_name)
+        """
         EM = np.asarray(EM)
         EM = np.expand_dims(EM, axis=2)
         CM = np.asarray(CM) 
         CM = np.expand_dims(CM, axis=2) 
         gt = np.concatenate((EM,CM),axis = 2)
         maps = Image.fromarray(gt)
+        """
         
         if self.transform is not None:
             image = self.transform(image)
         
         if self.target_transform is not None:
-            maps = self.target_transform(maps)    
+            CM = self.target_transform(CM)
+            EM = self.target_transform(EM)    
 
-        return image, maps
+        return image, EM, CM
 
+def map_loss(inputs, EM_gt,CM_gt,criterion):
+    '''
+    function to calculate total loss according to CFL paper
+    '''
+    EMLoss=0.
+    CMLoss=0.
+    for key in inputs:
+        output=torch.sigmoid(inputs[key])
+        EM=F.interpolate(EM_gt,size=(output.shape[-2],output.shape[-1]),mode='bilinear',align_corners=True)
+        CM=F.interpolate(CM_gt,size=(output.shape[-2],output.shape[-1]),mode='bilinear',align_corners=True)
+        edges,corners =torch.chunk(output,2,dim=1)
+        #edges,corners = torch.squeeze(edges,dim=1), torch.squeeze(corners,dim=1) 
+        #EM,CM = torch.squeeze(EM,dim=1), torch.squeeze(CM,dim=1)
+        EMLoss += criterion(edges,EM)
+        CMLoss += criterion(corners,CM)        
+    return EMLoss, CMLoss
 
 def _train(args):
     """
@@ -86,7 +147,8 @@ def _train(args):
                 dist.get_rank(), torch.cuda.is_available(), args.num_gpus))
     """            
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    #device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'cpu'
     logger.info("Device Type: {}".format(device))
 
     logger.info("Loading SUN360 dataset")
@@ -94,7 +156,7 @@ def _train(args):
         [transforms.Resize((224,224)),
          transforms.ToTensor(),
          transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-    target_transform = transforms.Compose([transforms.Resize((112,112)),
+    target_transform = transforms.Compose([transforms.Resize((224,224)),
                                            transforms.ToTensor()])     
 
     trainset = SUN360Dataset("imagedata.json",transform = transform, target_transform = target_transform)
@@ -116,22 +178,23 @@ def _train(args):
 
     model = model.to(device)
 
-    criterion = nn.CrossEntropyLoss().to(device)
+    criterion = CELoss().to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
 
     for epoch in range(0, args.epochs):
         running_loss = 0.0
         for i, data in enumerate(train_loader):
             # get the inputs
-            inputs, labels = data
-            inputs, labels = inputs.to(device), labels.to(device)
+            inputs, EM , CM = data
+            inputs, EM, CM = inputs.to(device), EM.to(device), CM.to(device)
 
             # zero the parameter gradients
             optimizer.zero_grad()
 
             # forward + backward + optimize
             outputs = model(inputs)
-            loss = criterion(outputs, labels)
+            EMLoss, CMLoss = map_loss(outputs,EM,CM,criterion)
+            loss = EMLoss + CMLoss
             loss.backward()
             optimizer.step()
 
@@ -170,13 +233,14 @@ if __name__ == '__main__':
 
     parser.add_argument('--workers', type=int, default=2, metavar='W',
                         help='number of data loading workers (default: 2)')
-    parser.add_argument('--epochs', type=int, default=2, metavar='E',
-                        help='number of total epochs to run (default: 2)')
+    parser.add_argument('--epochs', type=int, default=1, metavar='E',
+                        help='number of total epochs to run (default: 1)')
     parser.add_argument('--batch_size', type=int, default=4, metavar='BS',
                         help='batch size (default: 4)')
     parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
                         help='initial learning rate (default: 0.001)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M', help='momentum (default: 0.9)')
+    parser.add_argument('--model-dir', type=str, default="")
     #parser.add_argument('--dist_backend', type=str, default='gloo', help='distributed backend (default: gloo)')
 
     #env = sagemaker_containers.training_env()
