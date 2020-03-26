@@ -14,7 +14,7 @@ import torchvision
 import torchvision.models
 import torchvision.transforms as transforms
 import torch.nn.functional as F
-from torch.utils.data import Dataset, DataLoader
+from torch.utils.data import Dataset, DataLoader, Subset
 from PIL import Image
 #import numpy as np
 import pandas as pd
@@ -27,6 +27,62 @@ def _sigmoid(x):
   y = torch.clamp(x.sigmoid_(), min=1e-4, max=1-1e-4)
   return y
 """  
+
+def evaluate(pred, gt):
+    """
+    if map == 'edges':
+        prediction_path_list = glob.glob(os.path.join(args.results,'EM_test')+'/*.jpg')
+        gt_path_list = glob.glob(os.path.join(args.dataset, 'EM_gt')+'/*.jpg')
+    if map == 'corners':
+        prediction_path_list = glob.glob(os.path.join(args.results,'CM_test')+'/*.jpg')
+        gt_path_list = glob.glob(os.path.join(args.dataset, 'CM_gt')+'/*.jpg')
+    prediction_path_list.sort()
+    gt_path_list.sort()
+    """
+
+    #P, R, Acc, f1, IoU = [], [], [], [], []
+    # predicted image
+    #prediction = Image.open(prediction_path_list[im])
+    #pred_H, pred_W = pred.shape[0], pred.shape[1]
+    #prediction = torch.tensor(prediction)/255.
+    
+
+    # gt image
+    #gt = Image.open(gt_path_list[im])
+    #gt = gt.resize([pred_W, pred_H])
+    #gt = torch.tensor(gt)/255.
+    gt = (gt>=0.01).int()
+
+    th=0.1
+    gtpos=gt.eq(1)
+    gtneg=gt.eq(0)
+    predgt=pred.gt(th)
+    predle=pred.le(th)
+    tp = torch.sum((gtpos & predgt).float())
+    tn = torch.sum((gtneg & predle).float())
+    fp = torch.sum((gtneg & predgt).float())
+    fn = torch.sum((gtpos & predle).float())
+
+    # How accurate the positive predictions are
+    #P.append(tp / (tp + fp))
+    P = tp / (tp + fp)
+    # Coverage of actual positive sample
+    #R.append(tp / (tp + fn))
+    R = (tp / (tp + fn))
+    # Overall performance of model
+    #Acc.append((tp + tn) / (tp + tn + fp + fn))
+    Acc = ((tp + tn) / (tp + tn + fp + fn))
+    # Hybrid metric useful for unbalanced classes 
+    #f1.append(2 * (tp / (tp + fp))*(tp / (tp + fn))/((tp / (tp + fp))+(tp / (tp + fn))))
+    f1 = (2 * (tp / (tp + fp))*(tp / (tp + fn))/((tp / (tp + fp))+(tp / (tp + fn))))
+    # Intersection over Union
+    #IoU.append(tp / (tp + fp + fn))
+    IoU = (tp / (tp + fp + fn))
+      
+
+    #return torch.mean(P), torch.mean(R), torch.mean(Acc), torch.mean(f1), torch.mean(IoU)
+    return P, R, Acc, f1, IoU
+
 
 def ce_loss(pred, gt):
     '''
@@ -67,7 +123,7 @@ class CELoss(nn.Module):
 class SUN360Dataset(Dataset):
     
 
-    def __init__(self, json_file, transform=None, target_transform=None):
+    def __init__(self, file, transform=None, target_transform=None):
         """
         Args:
             json_file (string): Path to the json file with annotations.
@@ -76,7 +132,8 @@ class SUN360Dataset(Dataset):
             target_file (callable, optional): Optional transform to be applied
                 on a map (edge and corner).    
         """
-        self.images_data = pd.read_json(json_file)
+    
+        self.images_data = pd.read_json(file)    
         self.transform = transform
         self.target_transform = target_transform
 
@@ -93,6 +150,50 @@ class SUN360Dataset(Dataset):
         image = Image.open(img_name)
         EM = Image.open(EM_name)
         CM = Image.open(CM_name)
+        """
+        EM = np.asarray(EM)
+        EM = np.expand_dims(EM, axis=2)
+        CM = np.asarray(CM) 
+        CM = np.expand_dims(CM, axis=2) 
+        gt = np.concatenate((EM,CM),axis = 2)
+        maps = Image.fromarray(gt)
+        """
+        
+        if self.transform is not None:
+            image = self.transform(image)
+        
+        if self.target_transform is not None:
+            CM = self.target_transform(CM)
+            EM = self.target_transform(EM)    
+
+        return image, EM, CM
+
+class SplitDataset(Dataset):
+    
+
+    def __init__(self, dataset, transform=None, target_transform=None):
+        """
+        Args:
+            json_file (string): Path to the json file with annotations.
+            transform (callable, optional): Optional transform to be applied
+                on an image.
+            target_file (callable, optional): Optional transform to be applied
+                on a map (edge and corner).    
+        """
+    
+        self.images_data = dataset 
+        self.transform = transform
+        self.target_transform = target_transform
+
+    def __len__(self):
+        return len(self.images_data)
+
+    def __getitem__(self, idx):
+        
+        image, EM, CM = self.images_data[idx]
+        #EM = self.images_data[idx,1]
+        #CM = self.images_data[idx,2]
+
         """
         EM = np.asarray(EM)
         EM = np.expand_dims(EM, axis=2)
@@ -128,6 +229,23 @@ def map_loss(inputs, EM_gt,CM_gt,criterion):
         CMLoss += criterion(corners,CM)        
     return EMLoss, CMLoss
 
+
+def map_predict(outputs, EM_gt,CM_gt):
+    '''
+    function to calculate total loss according to CFL paper
+    '''
+    output=torch.sigmoid(outputs['output'])
+    EM=F.interpolate(EM_gt,size=(output.shape[-2],output.shape[-1]),mode='bilinear',align_corners=True)
+    CM=F.interpolate(CM_gt,size=(output.shape[-2],output.shape[-1]),mode='bilinear',align_corners=True)
+    edges,corners =torch.chunk(output,2,dim=1)
+    #edges,corners = torch.squeeze(edges,dim=1), torch.squeeze(corners,dim=1) 
+    #EM,CM = torch.squeeze(EM,dim=1), torch.squeeze(CM,dim=1)
+    P_e, R_e, Acc_e, f1_e, IoU_e = evaluate(edges,EM)
+    print('EDGES: IoU: ' + str('%.3f' % IoU_e) + '; Accuracy: ' + str('%.3f' % Acc_e) + '; Precision: ' + str('%.3f' % P_e) + '; Recall: ' + str('%.3f' % R_e) + '; f1 score: ' + str('%.3f' % f1_e))
+    P_c, R_c, Acc_c, f1_c, IoU_c = CMMetric=evaluate(corners, CM)
+    print('CORNERS: IoU: ' + str('%.3f' % IoU_c) + '; Accuracy: ' + str('%.3f' % Acc_c) + '; Precision: ' + str('%.3f' % P_c) + '; Recall: ' + str('%.3f' % R_c) + '; f1 score: ' + str('%.3f' % f1_c))
+
+
 def _train(args):
     """
     is_distributed = len(args.hosts) > 1 and args.dist_backend is not None
@@ -159,15 +277,18 @@ def _train(args):
     target_transform = transforms.Compose([transforms.Resize((224,224)),
                                            transforms.ToTensor()])     
 
-    trainset = SUN360Dataset("imagedata.json",transform = transform, target_transform = target_transform)
+    trainvalidset = SUN360Dataset(file="traindata.json",transform = None, target_transform = None)
+    train = Subset(trainvalidset, [0,1,2,3])
+    valid = Subset(trainvalidset, [4,5,6,7])
+    
+    trainset = SplitDataset(train, transform = transform, target_transform = target_transform)
     train_loader = DataLoader(trainset, batch_size=args.batch_size,
                                                shuffle=True, num_workers=args.workers)
-    """
-    testset = torchvision.datasets.CIFAR10(root=args.data_dir, train=False,
-                                           download=False, transform=transform)
-    test_loader = DataLoader(testset, batch_size=args.batch_size,
+    
+    validset = SplitDataset(valid, transform = transform, target_transform = target_transform)
+    valid_loader = DataLoader(validset, batch_size=1,
                                               shuffle=False, num_workers=args.workers)
-    """                                          
+                                             
 
     logger.info("Model loaded")
     model = EfficientNet.from_name('efficientnet-b0',conv_type='Equi')
@@ -181,7 +302,8 @@ def _train(args):
     criterion = CELoss().to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
 
-    for epoch in range(0, args.epochs):
+    for epoch in range(1, args.epochs+1):
+        # training phase
         running_loss = 0.0
         for i, data in enumerate(train_loader):
             # get the inputs
@@ -192,6 +314,7 @@ def _train(args):
             optimizer.zero_grad()
 
             # forward + backward + optimize
+            model.train()
             outputs = model(inputs)
             EMLoss, CMLoss = map_loss(outputs,EM,CM,criterion)
             loss = EMLoss + CMLoss
@@ -200,10 +323,22 @@ def _train(args):
 
             # print statistics
             running_loss += loss.item()
-            if i % 2000 == 1999:  # print every 2000 mini-batches
+            if i % 1 == 0:  # print every 1 mini-batches
                 print('[%d, %5d] loss: %.3f' %
-                      (epoch + 1, i + 1, running_loss / 2000))
+                      (epoch, i + 1, running_loss / 2000))
                 running_loss = 0.0
+        
+        # validation phase
+        if(epoch%1==0):
+            with torch.no_grad():
+                for i, data in enumerate(valid_loader):
+                    # get the inputs
+                    inputs, EM , CM = data
+                    inputs, EM, CM = inputs.to(device), EM.to(device), CM.to(device)
+                    model.eval()
+                    outputs = model(inputs)
+                    map_predict(outputs,EM,CM)        
+    
     print('Finished Training')
     return _save_model(model, args.model_dir)
 
