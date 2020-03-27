@@ -22,11 +22,11 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-"""
+
 def _sigmoid(x):
   y = torch.clamp(x.sigmoid_(), min=1e-4, max=1-1e-4)
   return y
-"""  
+
 def evaluate(pred, gt):
     """
     if map == 'edges':
@@ -50,7 +50,7 @@ def evaluate(pred, gt):
     #gt = Image.open(gt_path_list[im])
     #gt = gt.resize([pred_W, pred_H])
     #gt = torch.tensor(gt)/255.
-    gt = (gt>=0.01).int()
+    gt = (gt.ge(0.01)).int()
 
     th=0.1
     gtpos=gt.eq(1)
@@ -133,7 +133,7 @@ def map_predict(outputs, EM_gt,CM_gt):
     '''
     function to calculate total loss according to CFL paper
     '''
-    output=torch.sigmoid(outputs['output'])
+    output=_sigmoid(outputs['output'])
     EM=F.interpolate(EM_gt,size=(output.shape[-2],output.shape[-1]),mode='bilinear',align_corners=True)
     CM=F.interpolate(CM_gt,size=(output.shape[-2],output.shape[-1]),mode='bilinear',align_corners=True)
     edges,corners =torch.chunk(output,2,dim=1)
@@ -181,7 +181,7 @@ def _test(args):
                                               
 
     logger.info("Model loaded")
-    model = EfficientNet.from_name('efficientnet-b0',conv_type='Equi')
+    model = EfficientNet.from_pretrained('efficientnet-b0',conv_type='Equi')
     model.load_state_dict(torch.load("model.pth"))
 
     if torch.cuda.device_count() > 1:
@@ -212,7 +212,7 @@ def _save_model(model, model_dir):
 def model_fn(model_dir):
     logger.info('model_fn')
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = EfficientNet.from_name('efficient-b0',conv_type='Equi')
+    model = EfficientNet.from_pretrained('efficient-b0',conv_type='Equi')
     if torch.cuda.device_count() > 1:
         logger.info("Gpu count: {}".format(torch.cuda.device_count()))
         model = nn.DataParallel(model)

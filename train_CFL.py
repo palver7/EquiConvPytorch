@@ -22,11 +22,11 @@ import pandas as pd
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
 
-"""
+
 def _sigmoid(x):
   y = torch.clamp(x.sigmoid_(), min=1e-4, max=1-1e-4)
   return y
-"""  
+  
 
 def evaluate(pred, gt):
     """
@@ -51,7 +51,7 @@ def evaluate(pred, gt):
     #gt = Image.open(gt_path_list[im])
     #gt = gt.resize([pred_W, pred_H])
     #gt = torch.tensor(gt)/255.
-    gt = (gt>=0.01).int()
+    gt = (gt.ge(0.01)).int()
 
     th=0.1
     gtpos=gt.eq(1)
@@ -91,18 +91,22 @@ def ce_loss(pred, gt):
     where W per image (single channel) in minibatch = total number of pixels/ 
     number of positive or negative labels in that image 
     '''
-    pos_inds = gt.eq(1).float()
-    neg_inds = gt.lt(1).float()
+    #print(torch.max(gt[0][0]),torch.max(gt[1][0]),torch.max(gt[2][0]),torch.max(gt[3][0]))
+
+    pos_inds = gt.ge(0.01).float()
+    neg_inds = gt.lt(0.01).float()
+    N = (torch.numel(gt[0][0]))
+    N_1 = (torch.sum((pos_inds==1.).float(),dim=(1,2,3)))
+    N_0 = (torch.sum((neg_inds==1.).float(),dim=(1,2,3)))
     
-    pos_weights = (torch.numel(pred[0][0]))/(torch.sum((pos_inds==1.).float(),dim=(1,2,3)))
-    neg_weights = (torch.numel(pred[0][0]))/(torch.sum((neg_inds==1.).float(),dim=(1,2,3)))
+    W_1 = N/N_1
+    W_0 = N/N_0
     
     loss = 0
 
-    pos_loss = pos_weights.view(-1,1,1,1) * (gt * -torch.log(pred))
-    neg_loss = neg_weights.view(-1,1,1,1) * ((1 - gt)*(-torch.log(1-pred)))
+    pos_loss = W_1.view(-1,1,1,1) * (gt * -torch.log(pred))
+    neg_loss = W_0.view(-1,1,1,1) * ((1 - gt)*(-torch.log(1-pred)))
 
-    
     pos_loss = pos_loss.sum()
     neg_loss = neg_loss.sum()
     loss = pos_loss + neg_loss
@@ -219,7 +223,7 @@ def map_loss(inputs, EM_gt,CM_gt,criterion):
     EMLoss=0.
     CMLoss=0.
     for key in inputs:
-        output=torch.sigmoid(inputs[key])
+        output=_sigmoid(inputs[key])
         EM=F.interpolate(EM_gt,size=(output.shape[-2],output.shape[-1]),mode='bilinear',align_corners=True)
         CM=F.interpolate(CM_gt,size=(output.shape[-2],output.shape[-1]),mode='bilinear',align_corners=True)
         edges,corners =torch.chunk(output,2,dim=1)
@@ -234,7 +238,7 @@ def map_predict(outputs, EM_gt,CM_gt):
     '''
     function to calculate total loss according to CFL paper
     '''
-    output=torch.sigmoid(outputs['output'])
+    output=_sigmoid(outputs['output'])
     EM=F.interpolate(EM_gt,size=(output.shape[-2],output.shape[-1]),mode='bilinear',align_corners=True)
     CM=F.interpolate(CM_gt,size=(output.shape[-2],output.shape[-1]),mode='bilinear',align_corners=True)
     edges,corners =torch.chunk(output,2,dim=1)
@@ -291,7 +295,7 @@ def _train(args):
                                              
 
     logger.info("Model loaded")
-    model = EfficientNet.from_name('efficientnet-b0',conv_type='Equi')
+    model = EfficientNet.from_pretrained('efficientnet-b0',conv_type='Equi')
 
     if torch.cuda.device_count() > 1:
         logger.info("Gpu count: {}".format(torch.cuda.device_count()))
@@ -353,7 +357,7 @@ def _save_model(model, model_dir):
 def model_fn(model_dir):
     logger.info('model_fn')
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = EfficientNet.from_name('efficient-b0',conv_type='Equi')
+    model = EfficientNet.from_pretrained('efficient-b0',conv_type='Equi')
     if torch.cuda.device_count() > 1:
         logger.info("Gpu count: {}".format(torch.cuda.device_count()))
         model = nn.DataParallel(model)
