@@ -269,8 +269,7 @@ def _train(args):
                 dist.get_rank(), torch.cuda.is_available(), args.num_gpus))
     """            
 
-    #device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    device = 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logger.info("Device Type: {}".format(device))
 
     logger.info("Loading SUN360 dataset")
@@ -329,7 +328,7 @@ def _train(args):
             running_loss += loss.item()
             if i % 1 == 0:  # print every 1 mini-batches
                 print('[%d, %5d] loss: %.3f' %
-                      (epoch, i + 1, running_loss / 2000))
+                      (epoch, i + 1, running_loss / args.batch_size))
                 running_loss = 0.0
         
         # validation phase
@@ -368,6 +367,8 @@ def model_fn(model_dir):
 
 
 if __name__ == '__main__':
+    
+    import time
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--workers', type=int, default=2, metavar='W',
@@ -388,5 +389,8 @@ if __name__ == '__main__':
     #parser.add_argument('--model-dir', type=str, default=env.model_dir)
     #parser.add_argument('--data-dir', type=str, default=env.channel_input_dirs.get('training'))
     #parser.add_argument('--num-gpus', type=int, default=env.num_gpus)
-
+    time1=time.time()
     _train(parser.parse_args())
+    time2=time.time()
+    print(time2-time1)
+    

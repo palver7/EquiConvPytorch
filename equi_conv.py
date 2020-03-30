@@ -5,7 +5,7 @@ from torch.nn import init
 from torch.nn.parameter import Parameter
 from torch.nn.modules.utils import _pair
 from torch.jit.annotations import Optional, Tuple
-
+from torchvision.ops.deform_conv import deform_conv2d
 
 def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilation=(1, 1)):
     # type: (Tensor, Tensor, Tensor, Optional[Tensor], Tuple[int, int], Tuple[int, int], Tuple[int, int]) -> Tensor
@@ -39,27 +39,29 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
         >>> # returns
         >>>  torch.Size([1, 5, 8, 8])
     """
-
+    weight = weight.to(input.device)
     out_channels = weight.shape[0]
     if bias is None:
         bias = torch.zeros(out_channels, device=input.device, dtype=input.dtype)
+    else:
+        bias = bias.to(input.device)
 
     stride_h, stride_w = _pair(stride)
     pad_h, pad_w = _pair(padding)
     dil_h, dil_w = _pair(dilation)
     weights_h, weights_w = weight.shape[-2:]
-    _, n_in_channels, in_h, in_w = input.shape
+    bs, n_in_channels, in_h, in_w = input.shape
 
-    n_weight_grps = n_in_channels // weight.shape[1]
     pano_W = int((in_w + 2*pad_w - dil_w*(weights_w-1)-1)//stride_w + 1)
     pano_H = int((in_h + 2*pad_h - dil_h*(weights_h-1)-1)//stride_h + 1)
+
     def rotation_matrix(axis, theta):
         """ code by cfernandez and jmfacil """
         """
         Return the rotation matrix associated with counterclockwise rotation about
         the given axis by theta radians.
         """
-        axis = torch.as_tensor(axis)
+        axis = torch.as_tensor(axis, device='cpu', dtype=input.dtype)
         axis = axis / math.sqrt(torch.dot(axis, axis))
         a = math.cos(theta / 2.0)
         b, c, d = -axis * math.sin(theta / 2.0)
@@ -67,7 +69,7 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
         bc, ad, ac, ab, bd, cd = b * c, a * d, a * c, a * b, b * d, c * d
         ROT = torch.tensor([[aa + bb - cc - dd, 2 * (bc + ad), 2 * (bd - ac)],
                          [2 * (bc - ad), aa + cc - bb - dd, 2 * (cd + ab)],
-                         [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]])
+                         [2 * (bd + ac), 2 * (cd - ab), aa + dd - bb - cc]], device='cpu', dtype=input.dtype)
         return ROT
     
     
@@ -81,20 +83,20 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
         u_r, v_r = u, v 
         u_r, v_r = u_r-float(pano_W)/2.,v_r-float(pano_H)/2.
         phi, theta = u_r/(pano_W) * (math.pi) *2, -v_r/(pano_H) * (math.pi)
-
+        
         ROT = rotation_matrix((0,1,0),phi)
         ROT = torch.matmul(ROT,rotation_matrix((1,0,0),theta))#np.eye(3)
         
-        h_range = torch.tensor(range(k_H)).float()
-        w_range = torch.tensor(range(k_W)).float()
-        w_ones = (torch.ones(k_W))
-        h_ones = (torch.ones(k_H))
+        h_range = torch.tensor(range(k_H), device='cpu', dtype=input.dtype)
+        w_range = torch.tensor(range(k_W,), device='cpu', dtype=input.dtype)
+        w_ones = (torch.ones(k_W, device='cpu', dtype=input.dtype))
+        h_ones = (torch.ones(k_H, device='cpu', dtype=input.dtype))
         h_grid = torch.matmul(torch.unsqueeze(h_range,-1),torch.unsqueeze(w_ones,0))+0.5-float(k_H)/2
         w_grid = torch.matmul(torch.unsqueeze(h_ones,-1),torch.unsqueeze(w_range,0))+0.5-float(k_W)/2
         
-        K = torch.tensor([[focal,0,c_x],[0,focal,c_y],[0.,0.,1.]])
+        K = torch.tensor([[focal,0,c_x],[0,focal,c_y],[0.,0.,1.]], device='cpu', dtype=input.dtype)
         inv_K = torch.inverse(K)
-        rays = torch.stack([w_grid,h_grid,torch.ones(h_grid.shape)],0)
+        rays = torch.stack([w_grid,h_grid,torch.ones(h_grid.shape, device='cpu', dtype=input.dtype)],0)
         rays = torch.matmul(inv_K,rays.reshape(3,k_H*k_W))
         rays /= torch.norm(rays,dim=0,keepdim=True)
         rays = torch.matmul(ROT,rays)
@@ -113,14 +115,14 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
 
         offsets_x = (new_roi_x - roi_x)
         offsets_y = (new_roi_y - roi_y)
-
+        
         return offsets_x, offsets_y
 
     
     def distortion_aware_map(pano_W, pano_H, k_W, k_H, s_width = 1, s_height = 1,bs = 16):
         """ code by cfernandez and jmfacil """
         #n=1
-        offset = torch.zeros(2*k_H*k_W,pano_H,pano_W)
+        offset = torch.zeros(2*k_H*k_W,pano_H,pano_W, device='cpu', dtype=input.dtype)
         
         
         for v in range(0, pano_H, s_height): 
@@ -138,25 +140,10 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
         return offset            
     
     offset = distortion_aware_map(pano_W, pano_H, weights_w, weights_h, 
-              s_width = stride_w, s_height = stride_h, bs = input.shape[0])
-    n_offset_grps = offset.shape[1] // (2 * weights_h * weights_w)    
-    if n_offset_grps == 0:
-        raise RuntimeError(
-            "the shape of the offset tensor at dimension 1 is not valid. It should "
-            "be a multiple of 2 * weight.size[2] * weight.size[3].\n"
-            "Got offset.shape[1]={}, while 2 * weight.size[2] * weight.size[3]={}".format(
-                offset.shape[1], 2 * weights_h * weights_w))      
-
-    return torch.ops.torchvision.deform_conv2d(
-        input,
-        weight,
-        offset,
-        bias,
-        stride_h, stride_w,
-        pad_h, pad_w,
-        dil_h, dil_w,
-        n_weight_grps,
-        n_offset_grps)
+              s_width = stride_w, s_height = stride_h, bs = bs)
+    offset = offset.to(input.device)          
+                
+    return deform_conv2d(input, offset, weight, bias=bias, stride=stride, padding=padding, dilation=dilation)
 
 
 class EquiConv2d(nn.Module):

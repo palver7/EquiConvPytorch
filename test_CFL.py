@@ -163,8 +163,7 @@ def _test(args):
                 dist.get_rank(), torch.cuda.is_available(), args.num_gpus))
     """            
 
-    #device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    device = 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
     logger.info("Device Type: {}".format(device))
 
     logger.info("Loading SUN360 dataset")

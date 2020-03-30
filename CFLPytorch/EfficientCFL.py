@@ -37,12 +37,13 @@ class MBConvBlock(nn.Module):
 
         # Get static or dynamic convolution depending on image size
         Conv2d = get_same_padding_conv2d(image_size=global_params.image_size, conv_type= self._conv_type)
+        StdConv2d = get_same_padding_conv2d(image_size=global_params.image_size, conv_type= 'Std')
 
         # Expansion phase
         inp = self._block_args.input_filters  # number of input channels
         oup = self._block_args.input_filters * self._block_args.expand_ratio  # number of output channels
         if self._block_args.expand_ratio != 1:
-            self._expand_conv = Conv2d(in_channels=inp, out_channels=oup, kernel_size=1, bias=False)
+            self._expand_conv = StdConv2d(in_channels=inp, out_channels=oup, kernel_size=1, bias=False)
             self._bn0 = nn.BatchNorm2d(num_features=oup, momentum=self._bn_mom, eps=self._bn_eps)
 
         # Depthwise convolution phase
@@ -56,12 +57,12 @@ class MBConvBlock(nn.Module):
         # Squeeze and Excitation layer, if desired
         if self.has_se:
             num_squeezed_channels = max(1, int(self._block_args.input_filters * self._block_args.se_ratio))
-            self._se_reduce = Conv2d(in_channels=oup, out_channels=num_squeezed_channels, kernel_size=1)
-            self._se_expand = Conv2d(in_channels=num_squeezed_channels, out_channels=oup, kernel_size=1)
+            self._se_reduce = StdConv2d(in_channels=oup, out_channels=num_squeezed_channels, kernel_size=1)
+            self._se_expand = StdConv2d(in_channels=num_squeezed_channels, out_channels=oup, kernel_size=1)
 
         # Output phase
         final_oup = self._block_args.output_filters
-        self._project_conv = Conv2d(in_channels=oup, out_channels=final_oup, kernel_size=1, bias=False)
+        self._project_conv = StdConv2d(in_channels=oup, out_channels=final_oup, kernel_size=1, bias=False)
         self._bn2 = nn.BatchNorm2d(num_features=final_oup, momentum=self._bn_mom, eps=self._bn_eps)
         self._swish = MemoryEfficientSwish()
 
@@ -122,7 +123,8 @@ class EfficientNet(nn.Module):
 
         # Get static or dynamic convolution depending on image size
         Conv2d = get_same_padding_conv2d(image_size=global_params.image_size,conv_type=self._conv_type)
-
+        StdConv2d = get_same_padding_conv2d(image_size=global_params.image_size, conv_type= 'Std')
+        
         # Batch norm parameters
         bn_mom = 1 - self._global_params.batch_norm_momentum
         bn_eps = self._global_params.batch_norm_epsilon
@@ -154,7 +156,7 @@ class EfficientNet(nn.Module):
         # Head
         in_channels = block_args.output_filters  # output of final block
         out_channels = round_filters(1280, self._global_params)
-        self._conv_head = Conv2d(in_channels, out_channels, kernel_size=1, bias=False)
+        self._conv_head = StdConv2d(in_channels, out_channels, kernel_size=1, bias=False)
         self._bn1 = nn.BatchNorm2d(num_features=out_channels, momentum=bn_mom, eps=bn_eps)
 
         # Final linear layer

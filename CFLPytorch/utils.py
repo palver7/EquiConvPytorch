@@ -11,7 +11,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils import model_zoo
-from torchvision.ops.equi_conv import equi_conv2d, EquiConv2d 
+from equi_conv import equi_conv2d, EquiConv2d 
 
 ########################################################################
 ############### HELPERS FUNCTIONS FOR MODEL ARCHITECTURE ###############
