@@ -368,7 +368,7 @@ def model_fn(model_dir):
 
 if __name__ == '__main__':
     
-    import time
+    
     parser = argparse.ArgumentParser()
 
     parser.add_argument('--workers', type=int, default=2, metavar='W',
@@ -389,8 +389,7 @@ if __name__ == '__main__':
     #parser.add_argument('--model-dir', type=str, default=env.model_dir)
     #parser.add_argument('--data-dir', type=str, default=env.channel_input_dirs.get('training'))
     #parser.add_argument('--num-gpus', type=int, default=env.num_gpus)
-    time1=time.time()
+    
     _train(parser.parse_args())
-    time2=time.time()
-    print(time2-time1)
+    
     
