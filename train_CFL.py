@@ -16,7 +16,7 @@ import torchvision.transforms as transforms
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader, Subset
 from PIL import Image
-#import numpy as np
+import numpy as np
 import pandas as pd
 from CFLPytorch.offsetcalculator import offcalc
 import time
@@ -272,8 +272,8 @@ def _train(args):
                 dist.get_rank(), torch.cuda.is_available(), args.num_gpus))
     """            
 
-    #device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    device = 'cpu'
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    #device = 'cpu'
     logger.info("Device Type: {}".format(device))
     img_size = EfficientNet.get_image_size(args.model_name)
     logger.info("Loading SUN360 dataset")
