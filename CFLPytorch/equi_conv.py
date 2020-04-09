@@ -75,6 +75,7 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
     
     def equi_coord(pano_W,pano_H,k_W,k_H,u,v): 
         """ code by cfernandez and jmfacil """
+        """this part is the offset grid calculation"""
         fov_w = k_W * math.radians(360./float(pano_W))
         focal = (float(k_W)/2) / math.tan(fov_w/2)
         c_x = 0
@@ -83,6 +84,7 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
         u_r, v_r = u, v 
         u_r, v_r = u_r-float(pano_W)/2.,v_r-float(pano_H)/2.
         phi, theta = u_r/(pano_W) * (math.pi) *2, -v_r/(pano_H) * (math.pi)
+        
         
         ROT = rotation_matrix((0,1,0),phi)
         ROT = torch.matmul(ROT,rotation_matrix((1,0,0),theta))#np.eye(3)
@@ -104,6 +106,7 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
         
         phi = torch.atan2(rays[0,...],rays[2,...])
         theta = torch.asin(torch.clamp(rays[1,...],-1,1))
+    
         x = (pano_W)/(2.*math.pi)*phi +float(pano_W)/2.
         y = (pano_H)/(math.pi)*theta +float(pano_H)/2.
         
@@ -121,6 +124,7 @@ def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilatio
     
     def distortion_aware_map(pano_W, pano_H, k_W, k_H, s_width = 1, s_height = 1,bs = 16):
         """ code by cfernandez and jmfacil """
+        """this part is the code to populate the offset tensor with the calculated grid"""
         #n=1
         offset = torch.zeros(2*k_H*k_W,pano_H,pano_W, device='cpu', dtype=input.dtype)
         

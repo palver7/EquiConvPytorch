@@ -16,8 +16,10 @@ import torchvision.transforms as transforms
 import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
-#import numpy as np
+import numpy as np
 import pandas as pd
+from skimage.feature import corner_peaks, peak_local_max
+from CFLPytorch.offsetcalculator import offcalc
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -50,7 +52,7 @@ def evaluate(pred, gt):
     #gt = Image.open(gt_path_list[im])
     #gt = gt.resize([pred_W, pred_H])
     #gt = torch.tensor(gt)/255.
-    gt = (gt.ge(0.01)).int()
+    gt = (gt.ge(0.1)).int()
 
     th=0.1
     gtpos=gt.eq(1)
@@ -129,6 +131,28 @@ class SUN360Dataset(Dataset):
 
         return image, EM, CM
 
+
+def corners_2_xy(outputs):
+    output = _sigmoid(outputs['output'])
+    edges,corners =torch.chunk(output,2,dim=1)
+    corner1= 255* corners
+    corner1[corner1>127] = 255
+    corner1[corner1<127] = 0
+    corner1 = torch.cat((corner1,corner1,corner1),dim=-1)
+    corner1 = torch.squeeze(corner1)
+    array = corner1.detach().cpu().numpy().astype(np.uint8)
+    local_peaks = corner_peaks(array, min_distance=5, threshold_rel=0.5, indices=True)
+    local_peaks = np.array(local_peaks, dtype=np.float64)
+    height, width = array.shape
+    width /=3
+    col1m = (local_peaks[:,1]>=width) & (local_peaks[:,1]<2*width)
+    peaks = local_peaks[col1m] 
+    peaks[:,0]/=height
+    peaks[:,1]-= width
+    peaks[:,1]/= width
+    return peaks 
+
+
 def map_predict(outputs, EM_gt,CM_gt):
     '''
     function to calculate total loss according to CFL paper
@@ -164,23 +188,24 @@ def _test(args):
     """            
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    
     logger.info("Device Type: {}".format(device))
-
+    img_size=EfficientNet.get_image_size(args.model_name)
     logger.info("Loading SUN360 dataset")
     transform = transforms.Compose(
-        [transforms.Resize((224,224)),
+        [transforms.Resize((img_size,img_size)),
          transforms.ToTensor(),
          transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-    target_transform = transforms.Compose([transforms.Resize((224,224)),
+    target_transform = transforms.Compose([transforms.Resize((img_size,img_size)),
                                            transforms.ToTensor()])     
 
     testset = SUN360Dataset("testdata.json",transform = transform, target_transform = target_transform)
     test_loader = DataLoader(testset, batch_size=args.batch_size,
                                                shuffle=False, num_workers=args.workers)
                                               
-
+    layerdict, offsetdict = offcalc(args.batch_size)
     logger.info("Model loaded")
-    model = EfficientNet.from_pretrained('efficientnet-b0',conv_type='Equi')
+    model = EfficientNet.from_pretrained(args.model_name,conv_type='Std')
     model.load_state_dict(torch.load("model.pth"))
 
     if torch.cuda.device_count() > 1:
@@ -195,7 +220,9 @@ def _test(args):
             inputs, EM, CM = inputs.to(device), EM.to(device), CM.to(device)
             model.eval()
             outputs = model(inputs)
-            map_predict(outputs,EM,CM)
+            detection= corners_2_xy(outputs)
+            print(len(detection))
+            #map_predict(outputs,EM,CM)
         
     print('Finished Testing')
     
@@ -229,6 +256,7 @@ if __name__ == '__main__':
     parser.add_argument('--batch_size', type=int, default=1, metavar='BS',
                         help='batch size (default: 1)')
     parser.add_argument('--model-dir', type=str, default="")
+    parser.add_argument('--model-name', type=str, default="efficientnet-b0")
     #parser.add_argument('--dist_backend', type=str, default='gloo', help='distributed backend (default: gloo)')
 
     #env = sagemaker_containers.training_env()

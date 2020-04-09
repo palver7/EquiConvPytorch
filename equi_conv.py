@@ -7,7 +7,7 @@ from torch.nn.modules.utils import _pair
 from torch.jit.annotations import Optional, Tuple
 from torchvision.ops.deform_conv import deform_conv2d
 
-def equi_conv2d(input, weight, bias=None, stride=(1, 1), padding=(0, 0), dilation=(1, 1)):
+def equi_conv2d(input, weight, offsetdict, bias=None, stride=(1, 1), padding=(0, 0), dilation=(1, 1)):
     # type: (Tensor, Tensor, Tensor, Optional[Tensor], Tuple[int, int], Tuple[int, int], Tuple[int, int]) -> Tensor
     """
     Performs Equirectangular Convolution, described in Corners for Layout : End to End Layout Recovery from 360 Images
@@ -186,12 +186,12 @@ class EquiConv2d(nn.Module):
 
     
             
-    def forward(self, input):
+    def forward(self, input, offsetdict):
         """
         Arguments:
             input (Tensor[batch_size, in_channels, in_height, in_width]): input tensor
         """
-        return equi_conv2d(input, self.weight, self.bias, stride=self.stride,
+        return equi_conv2d(input, offsetdict, self.weight, self.bias, stride=self.stride,
                              padding=self.padding, dilation=self.dilation)
 
     def __repr__(self):

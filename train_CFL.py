@@ -18,6 +18,9 @@ from torch.utils.data import Dataset, DataLoader, Subset
 from PIL import Image
 #import numpy as np
 import pandas as pd
+from CFLPytorch.offsetcalculator import offcalc
+import time
+import torchprof
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
@@ -51,7 +54,7 @@ def evaluate(pred, gt):
     #gt = Image.open(gt_path_list[im])
     #gt = gt.resize([pred_W, pred_H])
     #gt = torch.tensor(gt)/255.
-    gt = (gt.ge(0.01)).int()
+    gt = (gt.ge(0.1)).int()
 
     th=0.1
     gtpos=gt.eq(1)
@@ -93,8 +96,8 @@ def ce_loss(pred, gt):
     '''
     #print(torch.max(gt[0][0]),torch.max(gt[1][0]),torch.max(gt[2][0]),torch.max(gt[3][0]))
 
-    pos_inds = gt.ge(0.01).float()
-    neg_inds = gt.lt(0.01).float()
+    pos_inds = gt.ge(0.1).float()
+    neg_inds = gt.lt(0.1).float()
     N = (torch.numel(gt[0][0]))
     N_1 = (torch.sum((pos_inds==1.).float(),dim=(1,2,3)))
     N_0 = (torch.sum((neg_inds==1.).float(),dim=(1,2,3)))
@@ -269,32 +272,36 @@ def _train(args):
                 dist.get_rank(), torch.cuda.is_available(), args.num_gpus))
     """            
 
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    #device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    device = 'cpu'
     logger.info("Device Type: {}".format(device))
-
+    img_size = EfficientNet.get_image_size(args.model_name)
     logger.info("Loading SUN360 dataset")
     transform = transforms.Compose(
-        [transforms.Resize((224,224)),
+        [transforms.Resize((img_size,img_size)),
          transforms.ToTensor(),
          transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])])
-    target_transform = transforms.Compose([transforms.Resize((224,224)),
+    target_transform = transforms.Compose([transforms.Resize((img_size,img_size)),
                                            transforms.ToTensor()])     
 
     trainvalidset = SUN360Dataset(file="traindata.json",transform = None, target_transform = None)
-    train = Subset(trainvalidset, [0,1,2,3])
-    valid = Subset(trainvalidset, [4,5,6,7])
+    indices = list(range(len(trainvalidset)))
+    train_idx = indices[:10]
+    valid_idx = indices[10:]
+    train = Subset(trainvalidset, train_idx)
+    valid = Subset(trainvalidset, valid_idx)
     
     trainset = SplitDataset(train, transform = transform, target_transform = target_transform)
     train_loader = DataLoader(trainset, batch_size=args.batch_size,
                                                shuffle=True, num_workers=args.workers)
     
     validset = SplitDataset(valid, transform = transform, target_transform = target_transform)
-    valid_loader = DataLoader(validset, batch_size=1,
+    valid_loader = DataLoader(validset, batch_size=args.batch_size,
                                               shuffle=False, num_workers=args.workers)
                                              
-
+    layerdict, offsetdict = offcalc(args.batch_size)
     logger.info("Model loaded")
-    model = EfficientNet.from_pretrained('efficientnet-b0',conv_type='Equi')
+    model = EfficientNet.from_pretrained(args.model_name,conv_type='Std', layerdict=None, offsetdict=None)
 
     if torch.cuda.device_count() > 1:
         logger.info("Gpu count: {}".format(torch.cuda.device_count()))
@@ -304,7 +311,7 @@ def _train(args):
 
     criterion = CELoss().to(device)
     optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
-
+    
     for epoch in range(1, args.epochs+1):
         # training phase
         running_loss = 0.0
@@ -326,22 +333,33 @@ def _train(args):
 
             # print statistics
             running_loss += loss.item()
+            """
             if i % 1 == 0:  # print every 1 mini-batches
                 print('[%d, %5d] loss: %.3f' %
                       (epoch, i + 1, running_loss / args.batch_size))
                 running_loss = 0.0
-        
+            """
+        epoch_loss = running_loss / len(trainset)   
+        print("loss: %.3f" %(epoch_loss))
+    
         # validation phase
         if(epoch%1==0):
             with torch.no_grad():
+                running_loss = 0.0
                 for i, data in enumerate(valid_loader):
                     # get the inputs
                     inputs, EM , CM = data
                     inputs, EM, CM = inputs.to(device), EM.to(device), CM.to(device)
                     model.eval()
                     outputs = model(inputs)
-                    map_predict(outputs,EM,CM)        
-    
+                    EMLoss, CMLoss = map_loss(outputs,EM,CM,criterion)
+                    loss = EMLoss + CMLoss
+                    # print statistics
+                    running_loss += loss.item()
+                    #map_predict(outputs,EM,CM)
+                      
+                epoch_loss = running_loss / len(validset)    
+                print("loss: %.3f" %(epoch_loss))
     print('Finished Training')
     return _save_model(model, args.model_dir)
 
@@ -353,10 +371,10 @@ def _save_model(model, model_dir):
     torch.save(model.cpu().state_dict(), path)
 
 
-def model_fn(model_dir):
+def model_fn(model_dir,model_name):
     logger.info('model_fn')
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = EfficientNet.from_pretrained('efficient-b0',conv_type='Equi')
+    model = EfficientNet.from_pretrained(model_name,conv_type='Equi')
     if torch.cuda.device_count() > 1:
         logger.info("Gpu count: {}".format(torch.cuda.device_count()))
         model = nn.DataParallel(model)
@@ -381,6 +399,7 @@ if __name__ == '__main__':
                         help='initial learning rate (default: 0.001)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M', help='momentum (default: 0.9)')
     parser.add_argument('--model-dir', type=str, default="")
+    parser.add_argument('--model-name', type=str,default="efficientnet-b0")
     #parser.add_argument('--dist_backend', type=str, default='gloo', help='distributed backend (default: gloo)')
 
     #env = sagemaker_containers.training_env()
@@ -389,7 +408,10 @@ if __name__ == '__main__':
     #parser.add_argument('--model-dir', type=str, default=env.model_dir)
     #parser.add_argument('--data-dir', type=str, default=env.channel_input_dirs.get('training'))
     #parser.add_argument('--num-gpus', type=int, default=env.num_gpus)
-    
+    #time1= time.time()
     _train(parser.parse_args())
-    
+    #time2=time.time()
+    #diff = time2 - time1
+    #print(diff," seconds")
+    #print(diff/60," minutes")
     

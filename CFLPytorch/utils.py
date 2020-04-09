@@ -11,7 +11,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 from torch.utils import model_zoo
-from .equi_conv import equi_conv2d, EquiConv2d 
+from torchvision.ops.deform_conv import deform_conv2d, DeformConv2d 
 
 ########################################################################
 ############### HELPERS FUNCTIONS FOR MODEL ARCHITECTURE ###############
@@ -105,14 +105,14 @@ def get_same_padding_conv2d(image_size=None, conv_type=None):
         return partial(Conv2dStaticSamePadding, image_size=image_size)
 
 
-class EquiConv2dDynamicSamePadding(EquiConv2d):
+class EquiConv2dDynamicSamePadding(DeformConv2d):
     """ 2D Convolutions like TensorFlow, for a dynamic image size """
 
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, dilation=1, groups=1, bias=True):
         super().__init__(in_channels, out_channels, kernel_size, stride, 0, dilation, groups, bias)
         self.stride = self.stride if len(self.stride) == 2 else [self.stride[0]] * 2
 
-    def forward(self, x):
+    def forward(self, x, offset):
         ih, iw = x.size()[-2:]
         kh, kw = self.weight.size()[-2:]
         sh, sw = self.stride
@@ -121,10 +121,18 @@ class EquiConv2dDynamicSamePadding(EquiConv2d):
         pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
         if pad_h > 0 or pad_w > 0:
             x = F.pad(x, [pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2])
-        return equi_conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation)
+        if x.shape[0] != offset.shape[0] :
+            sizediff = offset.shape[0] - x.shape[0]
+            offset = torch.split(offset,[x.shape[0],sizediff],dim=0)
+            offset = offset[0]
+        offset = offset.to(x.device)
+        self.weight = nn.Parameter(self.weight.to(x.device))
+        if self.bias is not None:
+            self.bias = nn.Parameter(self.bias.to(x.device))    
+        return deform_conv2d(x, offset, self.weight, self.bias, self.stride, self.padding, self.dilation)
 
 
-class EquiConv2dStaticSamePadding(EquiConv2d):
+class EquiConv2dStaticSamePadding(DeformConv2d):
     """ 2D Convolutions like TensorFlow, for a fixed image size"""
 
     def __init__(self, in_channels, out_channels, kernel_size, image_size=None, **kwargs):
@@ -144,9 +152,17 @@ class EquiConv2dStaticSamePadding(EquiConv2d):
         else:
             self.static_padding = Identity()
 
-    def forward(self, x):
+    def forward(self, x,offset):
         x = self.static_padding(x)
-        x = equi_conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation)
+        if x.shape[0] != offset.shape[0] :
+            sizediff = offset.shape[0] - x.shape[0]
+            offset = torch.split(offset,[x.shape[0],sizediff],dim=0)
+            offset = offset[0]
+        offset = offset.to(x.device)
+        self.weight = nn.Parameter(self.weight.to(x.device))
+        if self.bias is not None:
+            self.bias = nn.Parameter(self.bias.to(x.device))    
+        x = deform_conv2d(x, offset, self.weight, self.bias, self.stride, self.padding, self.dilation)
         return x
 
 
@@ -166,6 +182,10 @@ class Conv2dDynamicSamePadding(nn.Conv2d):
         pad_w = max((ow - 1) * self.stride[1] + (kw - 1) * self.dilation[1] + 1 - iw, 0)
         if pad_h > 0 or pad_w > 0:
             x = F.pad(x, [pad_w // 2, pad_w - pad_w // 2, pad_h // 2, pad_h - pad_h // 2])
+            self.weight = nn.Parameter(self.weight.to(x.device))
+            if self.bias is not None:
+                self.bias = nn.Parameter(self.bias.to(x.device))
+                
         return F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
 
 
@@ -191,6 +211,9 @@ class Conv2dStaticSamePadding(nn.Conv2d):
 
     def forward(self, x):
         x = self.static_padding(x)
+        self.weight = nn.Parameter(self.weight.to(x.device))
+        if self.bias is not None:
+            self.bias = nn.Parameter(self.bias.to(x.device))    
         x = F.conv2d(x, self.weight, self.bias, self.stride, self.padding, self.dilation, self.groups)
         return x
 
