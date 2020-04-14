@@ -21,9 +21,11 @@ import pandas as pd
 from CFLPytorch.offsetcalculator import offcalc
 import time
 import torchprof
+from torch.utils.tensorboard import SummaryWriter
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.DEBUG)
+writer= SummaryWriter(log_dir="runs/EfficientCFL_100epochs",comment="visualising losses of training and validation")
 
 
 def _sigmoid(x):
@@ -236,6 +238,16 @@ def map_loss(inputs, EM_gt,CM_gt,criterion):
         CMLoss += criterion(corners,CM)        
     return EMLoss, CMLoss
 
+def convert_to_images(inputs,epoch):
+    if not os.path.isdir("CM_pred"):
+        os.mkdir("CM_pred")
+    output = _sigmoid(inputs['output'])
+    edges,corners =torch.chunk(output,2,dim=1)
+    image = corners[0].detach().cpu().numpy() * 255
+    image = image.astype(np.uint8)
+    image = np.squeeze(image)
+    image = Image.fromarray(image)
+    image.save("CM_pred/image " + str(epoch)+".jpg")
 
 def map_predict(outputs, EM_gt,CM_gt):
     '''
@@ -284,8 +296,9 @@ def _train(args):
     target_transform = transforms.Compose([transforms.Resize((img_size,img_size)),
                                            transforms.ToTensor()])     
 
-    trainvalidset = SUN360Dataset(file="traindata.json",transform = None, target_transform = None)
+    trainvalidset = SUN360Dataset(file="traindatasmall.json",transform = None, target_transform = None)
     indices = list(range(len(trainvalidset)))
+    split = int(np.floor(len(trainvalidset)*0.8))
     train_idx = indices[:10]
     valid_idx = indices[10:]
     train = Subset(trainvalidset, train_idx)
@@ -299,18 +312,18 @@ def _train(args):
     valid_loader = DataLoader(validset, batch_size=args.batch_size,
                                               shuffle=False, num_workers=args.workers)
                                              
-    layerdict, offsetdict = offcalc(args.batch_size)
+    #layerdict, offsetdict = offcalc(args.batch_size)
     logger.info("Model loaded")
     model = EfficientNet.from_pretrained(args.model_name,conv_type='Std', layerdict=None, offsetdict=None)
 
     if torch.cuda.device_count() > 1:
         logger.info("Gpu count: {}".format(torch.cuda.device_count()))
         model = nn.DataParallel(model)
-
     model = model.to(device)
 
     criterion = CELoss().to(device)
-    optimizer = torch.optim.SGD(model.parameters(), lr=args.lr, momentum=args.momentum)
+    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr,weight_decay=0.1)
+    LR_scheduler = torch.optim.lr_scheduler.ExponentialLR(optimizer,0.995)
     
     for epoch in range(1, args.epochs+1):
         # training phase
@@ -340,7 +353,8 @@ def _train(args):
                 running_loss = 0.0
             """
         epoch_loss = running_loss / len(trainset)   
-        print("loss: %.3f" %(epoch_loss))
+        #print("train_loss: %.3f" %(epoch_loss))
+        writer.add_scalar("training_loss", epoch_loss,epoch)
     
         # validation phase
         if(epoch%1==0):
@@ -352,6 +366,8 @@ def _train(args):
                     inputs, EM, CM = inputs.to(device), EM.to(device), CM.to(device)
                     model.eval()
                     outputs = model(inputs)
+                    if(epoch%10 == 0 and i == 0):
+                        convert_to_images(outputs,epoch)
                     EMLoss, CMLoss = map_loss(outputs,EM,CM,criterion)
                     loss = EMLoss + CMLoss
                     # print statistics
@@ -359,14 +375,20 @@ def _train(args):
                     #map_predict(outputs,EM,CM)
                       
                 epoch_loss = running_loss / len(validset)    
-                print("loss: %.3f" %(epoch_loss))
+                #print("valid_loss: %.3f" %(epoch_loss))
+                writer.add_scalar("validation loss",epoch_loss,epoch)
+        if (epoch%25==0):
+            _save_model(model, args.model_dir, epoch)        
+        LR_scheduler.step()        
+    writer.close()            
     print('Finished Training')
-    return _save_model(model, args.model_dir)
+    
 
 
-def _save_model(model, model_dir):
+def _save_model(model, model_dir, epoch):
     logger.info("Saving the model.")
-    path = os.path.join(model_dir, 'model.pth')
+    modelfile = "model_epoch"+str(epoch)+".pth"
+    path = os.path.join(model_dir, modelfile)
     # recommended way from http://pytorch.org/docs/master/notes/serialization.html
     torch.save(model.cpu().state_dict(), path)
 
@@ -395,8 +417,8 @@ if __name__ == '__main__':
                         help='number of total epochs to run (default: 1)')
     parser.add_argument('--batch_size', type=int, default=4, metavar='BS',
                         help='batch size (default: 4)')
-    parser.add_argument('--lr', type=float, default=0.001, metavar='LR',
-                        help='initial learning rate (default: 0.001)')
+    parser.add_argument('--lr', type=float, default=2.5e-4, metavar='LR',
+                        help='initial learning rate (default: 2.5e-4)')
     parser.add_argument('--momentum', type=float, default=0.9, metavar='M', help='momentum (default: 0.9)')
     parser.add_argument('--model-dir', type=str, default="")
     parser.add_argument('--model-name', type=str,default="efficientnet-b0")
